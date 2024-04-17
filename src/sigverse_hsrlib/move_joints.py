@@ -58,7 +58,7 @@ class MoveJoints(Logger):
         self.loginfo("Send move ARM command")
 
     def move_base_joint(self, x, y, yaw, duration=5):
-        """ベースの
+        """ベースの移動
         """
         traj = JointTrajectory()
         traj.header.frame_id = "base_link"

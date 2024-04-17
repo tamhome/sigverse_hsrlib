@@ -1,255 +1,143 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Copyright (C) 2017 Toyota Motor Corporation
-
-from copy import deepcopy
-import math
 import sys
-
-import geometry_msgs.msg
-import moveit_commander
-import moveit_msgs.msg
 import rospy
-import shape_msgs.msg
-from tf.transformations import quaternion_from_euler, quaternion_multiply
-import trajectory_msgs.msg
+import moveit_commander
+# import moveit_msgs.msg
+import tf2_ros
+import tf2_geometry_msgs
+from typing import Tuple, List
+from tamlib.utils import Logger
 
 
-class HSRBMoveIt(object):
-    def __init__(self, wait=0.0) -> None:
-        """initialize
-        """
+from geometry_msgs.msg import Pose
+from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import TransformStamped
+from moveit_msgs.msg import DisplayTrajectory
+
+
+class HSRBMoveIt(Logger):
+
+    def __init__(self):
+        Logger.__init__(self, loglevel="DEBUG")
+
         moveit_commander.roscpp_initialize(sys.argv)
-        rospy.init_node("moveit_demo", anonymous=True)
 
-        self.reference_frame = "odom"
+        # MoveItのインターフェースとロボットの情報を初期化
+        robot = moveit_commander.RobotCommander()
+        scene = moveit_commander.PlanningSceneInterface()
         arm = moveit_commander.MoveGroupCommander("arm", wait_for_servers=0.0)
         base = moveit_commander.MoveGroupCommander("base", wait_for_servers=0.0)
         gripper = moveit_commander.MoveGroupCommander("gripper", wait_for_servers=0.0)
         head = moveit_commander.MoveGroupCommander("head", wait_for_servers=0.0)
-        self.whole_body = moveit_commander.MoveGroupCommander("whole_body", wait_for_servers=0.0)
-        self.scene = moveit_commander.PlanningSceneInterface()
-        self.whole_body.allow_replanning(True)
-        self.whole_body.set_planning_time(5)
-        self.whole_body.set_pose_reference_frame(self.reference_frame)
-        self.end_effector = self.whole_body.get_end_effector_link()
-        rospy.sleep(1)
+        whole_body = moveit_commander.MoveGroupCommander("whole_body", wait_for_servers=0.0)
 
-        # remove all objects
-        self.scene.remove_attached_object(self.end_effector)
-        self.scene.remove_world_object()
-        rospy.sleep(1)
+        self.display_trajectory_publisher = rospy.Publisher('/move_group/display_planned_path', DisplayTrajectory, queue_size=20)
+        self.move_group = whole_body
+        self.move_group.set_planning_time(10.0)  # 最大計画時間を10秒に設定
 
-    def delete(self):
-        """デストラクタ
+        # TF2リスナーのセットアップ
+        self.tf_listener = tf2_ros.Buffer()
+        self.listener = tf2_ros.TransformListener(self.tf_listener)
+        self.broadcaster = tf2_ros.TransformBroadcaster()
+
+    def broadcast_tf(self, position: List[float, float, float], orientation: List[float, float, float, float], target_frame: str, base_frame="odom") -> None:
+        """TFの配信をする関数
+        Args:
+            position (List[float, float, float]): 目標フレームの位置を表す3要素のタプル (x, y, z)
+            orientation (List[float, float, float, float]): 目標フレームの姿勢を表すクォータニオン (x, y, z, w)
+            target_frame (str): 変換情報が適用される子フレームの名前
+            base_frame (str, optional): 変換情報の基準となる親フレームの名前。デフォルトは 'odom'
+
+        Example:
+            broadcast_tf([1.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0], "target_frame", "odom")
         """
-        moveit_commander.roscpp_shutdown()
-        moveit_commander.os._exit(0)
-        return True
+        transform = TransformStamped()
 
-    def pick(self, target, grasps):
-        n_attempts = 0
-        max_pick_attempts = 10
-        result = None
+        transform.header.stamp = rospy.Time.now()
+        transform.header.frame_id = base_frame
+        transform.child_frame_id = target_frame
+        transform.transform.translation.x = position[0]
+        transform.transform.translation.y = position[1]
+        transform.transform.translation.z = position[2]
+        transform.transform.rotation.x = orientation[0]
+        transform.transform.rotation.y = orientation[1]
+        transform.transform.rotation.z = orientation[2]
+        transform.transform.rotation.w = orientation[3]
 
-        while (result != moveit_msgs.msg.MoveItErrorCodes.SUCCESS) and (n_attempts < max_pick_attempts):
-            n_attempts += 1
-            rospy.loginfo("Pick attempt: " + str(n_attempts))
-            result = self.whole_body.pick(target, grasps)
-            rospy.sleep(0.2)
-        if result != moveit_msgs.msg.MoveItErrorCodes.SUCCESS:
-            self.scene.remove_attached_object(self.end_effector)
-        return result
+        # 発行するトランスフォームを送信
+        self.broadcaster.sendTransform(transform)
 
-    def place(self, target, location):
-        n_attempts = 0
-        max_pick_attempts = 10
-        result = None
+    def move_to_tf_target(self, target_frame: str, base_frame="odom", timeout=30) -> bool:
+        """全身駆動を用いて目標とするTFへエンドエフェクタを移動させる関数
+        Args:
+            target_frame(str): 目標とするTFの名前
+            base_frame(str): 指定したTFの親リンク
+                defaults to odom
+            timeout(int): executeに関するタイムアウト
+                defaults to 30
+        Returns:
+            bool: 移動に成功したかどうか
+        """
+        try:
+            # リスナーを使用して、base_frameからtarget_frameへの変換を取得します
+            trans = self.tf_listener.lookup_transform(base_frame, target_frame, rospy.Time(0), rospy.Duration(1.0))
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
+            self.logerr("TF transform error: {}".format(e))
+            return False
 
-        while (result != moveit_msgs.msg.MoveItErrorCodes.SUCCESS) and \
-              (n_attempts < max_pick_attempts):
-            n_attempts += 1
-            rospy.loginfo("Place attempt: " + str(n_attempts))
-            result = self.whole_body.place(target, location)
-            rospy.sleep(0.2)
-        if result != moveit_msgs.msg.MoveItErrorCodes.SUCCESS:
-            self.scene.remove_attached_object(self.end_effector)
-        return result
+        # TFから取得した変換をPoseに変換
+        target_pose = tf2_geometry_msgs.do_transform_pose(PoseStamped(), trans)
+        self.loginfo("get target pose")
 
-    def make_gripper_posture(self, pos, effort=0.0):
-        t = trajectory_msgs.msg.JointTrajectory()
-        t.joint_names = ["hand_motor_joint"]
-        tp = trajectory_msgs.msg.JointTrajectoryPoint()
-        tp.positions = [pos]
-        tp.effort = [effort]
-        tp.time_from_start = rospy.Duration(2.0)
-        t.points.append(tp)
-        return t
+        # MoveItを使用して目標位置に移動
+        self.move_group.set_pose_target(target_pose.pose)
 
-    def make_gripper_translation(self, min_dist, desired, vector, frame=None):
-        g = moveit_msgs.msg.GripperTranslation()
-        g.direction.vector.x = vector[0]
-        g.direction.vector.y = vector[1]
-        g.direction.vector.z = vector[2]
-        if frame is None:
-            g.direction.header.frame_id = self.end_effector
-        else:
-            g.direction.header.frame_id = frame
-        g.min_distance = min_dist
-        g.desired_distance = desired
-        return g
+        # 目標位置への移動
+        status = False
+        start_time = rospy.Time.now()
+        timeout_duration = rospy.Duration(timeout)
 
-    def make_pose(self, init, x, y, z, roll, pitch, yaw):
-        pose = geometry_msgs.msg.PoseStamped()
-        pose.header.frame_id = self.reference_frame
-        q = quaternion_from_euler(roll, pitch, yaw)
-        q = quaternion_multiply(init, q)
-        pose.pose.orientation.x = q[0]
-        pose.pose.orientation.y = q[1]
-        pose.pose.orientation.z = q[2]
-        pose.pose.orientation.w = q[3]
-        pose.pose.position.x = x
-        pose.pose.position.y = y
-        pose.pose.position.z = z
-        return pose
+        while status is False:
+            current_time = rospy.Time.now()
+            elapsed_time = current_time - start_time
 
-    def make_grasps(self, target, init, quality=None, x=[0], y=[0], z=[0], roll=[0], pitch=[0], yaw=[0]):
-        poses = self.scene.get_object_poses([target])
-        pose = poses[target]
-        g = moveit_msgs.msg.Grasp()
-        g.pre_grasp_posture = self.make_gripper_posture(0.8)
-        g.grasp_posture = self.make_gripper_posture(0.2, -0.01)
-        g.pre_grasp_approach = self.make_gripper_translation(0.01, 0.02, [0.0, 0.0, 1.0])
-        g.post_grasp_retreat = self.make_gripper_translation(0.01, 0.02, [0.0, 0.0, 1.0], "base_footprint")
-        grasps = []
-        for ix in x:
-            for iy in y:
-                for iz in z:
-                    for iroll in roll:
-                        for ipitch in pitch:
-                            for iyaw in yaw:
-                                x = pose.position.x + ix
-                                y = pose.position.y + iy
-                                z = pose.position.z + iz
-                                g.grasp_pose = self.make_pose(init, x, y, z, iroll, ipitch, iyaw)
+            # 動作計画できない場合を考慮したタイムアウトの実装
+            if elapsed_time > timeout_duration:
+                self.logwarn("TIMEOUT cannot reach target")
+                self.move_group.stop()
+                self.move_group.clear_pose_targets()
+                status = False
+                break
 
-            g.id = str(len(grasps))
-            g.allowed_touch_objects = ["target1"]
-            g.max_contact_force = 0
-            if quality is None:
-                g.grasp_quality = 1.0
-            else:
-                g.grasp_quality = quality(ix, iy, iz, iroll, ipitch, iyaw)
-            grasps.append(deepcopy(g))
-        return grasps
+            status = self.move_group.go(wait=True)
 
-    def make_place_location(self, x, y, z):
-        location = moveit_msgs.msg.PlaceLocation()
-        location.pre_place_approach = self.make_gripper_translation(0.03, 0.05, [0, 0, -1.0], "base_footprint")
-        location.post_place_posture = self.make_gripper_posture(0.8)
-        location.post_place_retreat = self.make_gripper_translation(0.03, 0.05, [0, 0, -1.0])
-        location.place_pose = self.make_pose((0, 0, 0, 1), x, y, z, 0, 0, 0)
-        return location
+        if status is True:
+            self.logsuccess("reached target tf")
 
-    def add_box(self, name, size, pos):
-        p = geometry_msgs.msg.PoseStamped()
-        p.header.frame_id = self.reference_frame
-        p.pose.position.x = pos[0]
-        p.pose.position.y = pos[1]
-        p.pose.position.z = pos[2]
-        p.pose.orientation.w = 1.0
-        self.scene.add_box(name, p, size)
+        return status
 
-    def add_cylinder(self, name, radius, height, pos):
-        co = moveit_msgs.msg.CollisionObject()
-        co.operation = moveit_msgs.msg.CollisionObject.ADD
-        co.id = name
-        co.header.frame_id = self.reference_frame
-        box = shape_msgs.msg.SolidPrimitive()
-        box.type = shape_msgs.msg.SolidPrimitive.CYLINDER
-        box.dimensions = [height, radius]
-        co.primitives = [box]
-        p = geometry_msgs.msg.Pose()
-        p.position.x = pos[0]
-        p.position.y = pos[1]
-        p.position.z = pos[2]
-        co.primitive_poses = [p]
-        self.scene._pub_co.publish(co)
+    # def all_close(self, goal, actual, tolerance):
+    #     """
+    #     目標位置と現在位置の差を比較
+    #     """
+    #     if type(goal) is list:
+    #         for g, a in zip(goal, actual):
+    #             if abs(a - g) > tolerance:
+    #                 return False
+    #     elif type(goal) is Pose:
+    #         return self.all_close([goal.position.x, goal.position.y, goal.position.z], [actual.position.x, actual.position.y, actual.position.z], tolerance) and \
+    #             self.all_close([goal.orientation.x, goal.orientation.y, goal.orientation.z, goal.orientation.w], [actual.orientation.x, actual.orientation.y, actual.orientation.z, actual.orientation.w], tolerance)
+    #     return True
 
 
-if __name__ == "__main__":
-    HSRBMoveIt(float(sys.argv[1]) if len(sys.argv) > 1 else 0.0)
+if __name__ == '__main__':
+    try:
+        rospy.init_node("moveit_test")
+        cls = HSRBMoveIt()
+        target_frame = "target_frame"
+        cls.move_to_tf_target(target_frame)
 
-
-        # # move_to_neutral
-        # rospy.loginfo("step1: move_to_neutral")
-        # base.go()
-        # arm.set_named_target("neutral")
-        # arm.go()
-        # head.set_named_target("neutral")
-        # head.go()
-        # gripper.set_joint_value_target("hand_motor_joint", 0.5)
-        # gripper.go()
-        # rospy.logdebug("done")
-        # rospy.sleep(wait)
-
-        # # add objects
-        # self.add_box("table",
-        #              [0.3, 0.8, 0.01],
-        #              [0.5, 0.0, 0.5 - 0.01 / 2])
-        # self.add_box("wall",
-        #              [0.3, 0.01, 0.1],
-        #              [0.5, 0.0, 0.5 + 0.1 / 2])
-        # self.add_box("target1",
-        #              [0.02, 0.02, 0.2],
-        #              [0.5, 0.10, 0.5 + 0.2 / 2])
-        # self.add_cylinder("target2",
-        #                   0.03, 0.08,
-        #                   [0.5, 0.25, 0.5 + 0.08 / 2])
-        # rospy.sleep(1)
-
-        # # pick target1
-        # self.whole_body.set_support_surface_name("table")
-        # rospy.loginfo("step2: pick target1")
-        # grasps = self.make_grasps("target1",
-        #                           (0.707, 0.0, 0.707, 0.0),
-        #                           quality=lambda x, y, z, roll, pitch, yaw: 1 - abs(pitch),  # noqa
-        #                           x=[-0.07],
-        #                           pitch=[-0.2, -0.1, 0, 0.1, 0.2])
-        # self.pick("target1", grasps)
-        # rospy.logdebug("done")
-        # rospy.sleep(wait)
-
-        # # place target1
-        # rospy.loginfo("step3: place target1")
-        # location = self.make_place_location(0.4, -0.2, 0.5 + 0.2 / 2)
-        # self.place("target1", location)
-        # rospy.logdebug("done")
-        # rospy.sleep(wait)
-
-        # gripper.set_joint_value_target("hand_motor_joint", 1.0)
-        # gripper.go()
-
-        # # pick target2
-        # rospy.loginfo("step4: pick target2")
-        # yaw = [i / 180.0 * math.pi for i in range(0, 360, 30)]
-        # grasps = self.make_grasps("target2",
-        #                           (1, 0, 0, 0),
-        #                           z=[0.1],
-        #                           yaw=yaw)
-        # self.pick("target2", grasps)
-        # rospy.logdebug("done")
-        # rospy.sleep(wait)
-
-        # # place target2
-        # rospy.loginfo("step4: place target2")
-        # self.whole_body.set_support_surface_name("target1")
-        # location = self.make_place_location(0.4, -0.2, 0.7 + 0.08 / 2)
-        # self.place("target2", location)
-        # rospy.logdebug("done")
-        # rospy.sleep(wait)
-
-        # # finalize
-        # moveit_commander.roscpp_shutdown()
-        # moveit_commander.os._exit(0)
+    except rospy.ROSInterruptException:
+        pass
