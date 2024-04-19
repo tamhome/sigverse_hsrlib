@@ -76,7 +76,7 @@ class MoveJoints(Logger):
         Args:
             angle(float): ハンドの開閉角を指定
                 angle = 0 -> close
-                angle =3.14 -> open
+                angle = 3.14 -> open
         Returns:
             bool: 成功したかどうか
         """

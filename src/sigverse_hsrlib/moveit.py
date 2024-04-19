@@ -57,13 +57,14 @@ class HSRBMoveIt(Logger):
         self.move_group.stop()
         self.move_group.clear_pose_targets()
 
-    def broadcast_tf(self, position: Tuple[float, float, float], orientation: Tuple[float, float, float, float], target_frame: str, base_frame="odom") -> None:
+    def broadcast_tf(self, position: Tuple[float, float, float], orientation: Tuple[float, float, float, float], target_frame: str, base_frame="odom", loop_num=30) -> None:
         """TFの配信をする関数
         Args:
             position (List[float, float, float]): 目標フレームの位置を表す3要素のタプル (x, y, z)
             orientation (List[float, float, float, float]): 目標フレームの姿勢を表すクォータニオン (x, y, z, w)
             target_frame (str): 変換情報が適用される子フレームの名前
             base_frame (str, optional): 変換情報の基準となる親フレームの名前。デフォルトは 'odom'
+            loop_num(int): 30
 
         Example:
             broadcast_tf([1.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0], "target_frame", "odom")
@@ -82,7 +83,8 @@ class HSRBMoveIt(Logger):
         transform.transform.rotation.w = orientation[3]
 
         # 発行するトランスフォームを送信
-        self.broadcaster.sendTransform(transform)
+        for _ in range(loop_num):
+            self.broadcaster.sendTransform(transform)
 
     def move_to_tf_target(self, target_frame: str, base_frame="odom", timeout=30, use_cartesian=False) -> bool:
         """全身駆動を用いて目標とするTFへエンドエフェクタを移動させる関数

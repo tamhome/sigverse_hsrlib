@@ -38,11 +38,12 @@ class TestTfPublissher(Logger):
 
     def run(self, position, orientation):
         # ループの間隔を設定
-        rate = rospy.Rate(10.0)
+        rate = rospy.Rate(30.0)
 
         while not rospy.is_shutdown():
+        # for i in range(10):
             # ここで位置と姿勢を設定
-            position = [1.45, 1.2, 0.05]  # 位置: x, y, z
+            position = [3.45, 1.2, 0.05]  # 位置: x, y, z
             # 正面
             orientation = tf.transformations.quaternion_from_euler(3.14, -1.57, 0)
             # 上から
@@ -59,7 +60,7 @@ class TestTfPublissher(Logger):
 if __name__ == '__main__':
     rospy.init_node('tf2_broadcaster_example')
     cls = TestTfPublissher()
-    position = [1.6, 1.2, 0.02]  # 位置: x, y, z
+    position = [1.9, 2.2, 0.02]  # 位置: x, y, z
     orientation = tf.transformations.quaternion_from_euler(3.14, -1.57, 0)
 
     cls.run(position=position, orientation=orientation)
