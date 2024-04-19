@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import tf
 import sys
 import rospy
 import moveit_commander
@@ -25,7 +26,7 @@ class HSRBMoveIt(Logger):
         moveit_commander.roscpp_initialize(sys.argv)
 
         # MoveItのインターフェースとロボットの情報を初期化
-        robot = moveit_commander.RobotCommander()
+        self.robot = moveit_commander.RobotCommander()
         scene = moveit_commander.PlanningSceneInterface()
         arm = moveit_commander.MoveGroupCommander("arm", wait_for_servers=0.0)
         base = moveit_commander.MoveGroupCommander("base", wait_for_servers=0.0)
@@ -33,16 +34,30 @@ class HSRBMoveIt(Logger):
         head = moveit_commander.MoveGroupCommander("head", wait_for_servers=0.0)
         whole_body = moveit_commander.MoveGroupCommander("whole_body", wait_for_servers=0.0)
 
+
         self.display_trajectory_publisher = rospy.Publisher('/move_group/display_planned_path', DisplayTrajectory, queue_size=20)
         self.move_group = whole_body
         self.move_group.set_planning_time(10.0)  # 最大計画時間を10秒に設定
+
+        eef_link = self.move_group.get_end_effector_link()  # エンドエフェクタのリンクを取得
+
+        if eef_link is None:
+            self.logerr("指定されたエンドエフェクタが見つかりません。")
+            moveit_commander.roscpp_shutdown()
+            return
+        else:
+            self.loginfo("get tf link")
 
         # TF2リスナーのセットアップ
         self.tf_listener = tf2_ros.Buffer()
         self.listener = tf2_ros.TransformListener(self.tf_listener)
         self.broadcaster = tf2_ros.TransformBroadcaster()
 
-    def broadcast_tf(self, position: List[float, float, float], orientation: List[float, float, float, float], target_frame: str, base_frame="odom") -> None:
+    def delete(self):
+        self.move_group.stop()
+        self.move_group.clear_pose_targets()
+
+    def broadcast_tf(self, position: Tuple[float, float, float], orientation: Tuple[float, float, float, float], target_frame: str, base_frame="odom") -> None:
         """TFの配信をする関数
         Args:
             position (List[float, float, float]): 目標フレームの位置を表す3要素のタプル (x, y, z)
@@ -69,7 +84,7 @@ class HSRBMoveIt(Logger):
         # 発行するトランスフォームを送信
         self.broadcaster.sendTransform(transform)
 
-    def move_to_tf_target(self, target_frame: str, base_frame="odom", timeout=30) -> bool:
+    def move_to_tf_target(self, target_frame: str, base_frame="odom", timeout=30, use_cartesian=False) -> bool:
         """全身駆動を用いて目標とするTFへエンドエフェクタを移動させる関数
         Args:
             target_frame(str): 目標とするTFの名前
@@ -80,6 +95,7 @@ class HSRBMoveIt(Logger):
         Returns:
             bool: 移動に成功したかどうか
         """
+        self.delete()
         try:
             # リスナーを使用して、base_frameからtarget_frameへの変換を取得します
             trans = self.tf_listener.lookup_transform(base_frame, target_frame, rospy.Time(0), rospy.Duration(1.0))
@@ -88,33 +104,61 @@ class HSRBMoveIt(Logger):
             return False
 
         # TFから取得した変換をPoseに変換
-        target_pose = tf2_geometry_msgs.do_transform_pose(PoseStamped(), trans)
-        self.loginfo("get target pose")
+        # print(trans)
+        # target_pose = tf2_geometry_msgs.do_transform_pose(PoseStamped(), trans)
+        target_pose = PoseStamped()
+        target_pose.header = trans.header
+        target_pose.pose.position = trans.transform.translation
+        target_pose.pose.orientation = trans.transform.rotation
+        self.loginfo(target_pose)
+        # orientation = tf.transformations.quaternion_from_euler(3.14, -1.57, 0)
+        # target_pose.pose.orientation.x = orientation[0]
+        # target_pose.pose.orientation.y = orientation[1]
+        # target_pose.pose.orientation.z = orientation[2]
+        # target_pose.pose.orientation.w = orientation[3]
+        # self.loginfo("get target pose")
 
         # MoveItを使用して目標位置に移動
-        self.move_group.set_pose_target(target_pose.pose)
+        if use_cartesian:
+            plan, fraction = self.move_group.compute_cartesian_path(target_pose, 0.1)
+            self.move_group.execute(plan)
+            status = True
+        else:
+            self.move_group.set_pose_target(target_pose)
 
-        # 目標位置への移動
-        status = False
-        start_time = rospy.Time.now()
-        timeout_duration = rospy.Duration(timeout)
+            # 目標位置への移動
+            status = False
+            start_time = rospy.Time.now()
+            timeout_duration = rospy.Duration(timeout)
 
-        while status is False:
-            current_time = rospy.Time.now()
-            elapsed_time = current_time - start_time
+            while status is False:
+                self.logdebug("attempt to tf")
+                self.loginfo(target_pose)
+                current_time = rospy.Time.now()
+                elapsed_time = current_time - start_time
 
-            # 動作計画できない場合を考慮したタイムアウトの実装
-            if elapsed_time > timeout_duration:
-                self.logwarn("TIMEOUT cannot reach target")
-                self.move_group.stop()
-                self.move_group.clear_pose_targets()
-                status = False
-                break
+                # 動作計画できない場合を考慮したタイムアウトの実装
+                if elapsed_time > timeout_duration:
+                    self.logwarn("TIMEOUT cannot reach target")
+                    self.move_group.stop()
+                    self.move_group.clear_pose_targets()
+                    status = False
+                    break
 
-            status = self.move_group.go(wait=True)
+                status = self.move_group.go(wait=True)
+                try:
+                    # 軌跡の表示
+                    plan = self.move_group.plan()
+                    display_trajectory = DisplayTrajectory()
+                    display_trajectory.trajectory_start = self.robot.get_current_state()
+                    display_trajectory.trajectory.append(plan)
+                    self.display_trajectory_publisher.publish(display_trajectory)
+                    rospy.sleep(5)  # 軌跡を表示させる時間
+                except Exception as e:
+                    self.logwarn(e)
 
-        if status is True:
-            self.logsuccess("reached target tf")
+            if status is True:
+                self.logsuccess("reached target tf")
 
         return status
 
