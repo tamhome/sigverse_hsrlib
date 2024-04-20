@@ -34,7 +34,6 @@ class HSRBMoveIt(Logger):
         head = moveit_commander.MoveGroupCommander("head", wait_for_servers=0.0)
         whole_body = moveit_commander.MoveGroupCommander("whole_body", wait_for_servers=0.0)
 
-
         self.display_trajectory_publisher = rospy.Publisher('/move_group/display_planned_path', DisplayTrajectory, queue_size=20)
         self.move_group = whole_body
         self.move_group.set_planning_time(10.0)  # 最大計画時間を10秒に設定
@@ -86,14 +85,67 @@ class HSRBMoveIt(Logger):
         for _ in range(loop_num):
             self.broadcaster.sendTransform(transform)
 
-    def move_to_tf_target(self, target_frame: str, base_frame="odom", timeout=30, use_cartesian=False) -> bool:
+    def move_to_pose(self, target_pose: PoseStamped, base_frame="odom", timeout=60) -> bool:
+        """全身駆動を用いて，目標座標へエンドエフェクタを移動させる関数
+        Args:
+            target_pose(PoseStamped): 目標座標
+            base_frame(str): ベースフレーム
+            timeout(int): 移動に関する最大時間
+        Returns:
+            bool: 移動に成功したかどうか
+        """
+        # orientation = tf.transformations.quaternion_from_euler(0, -1.57, 1.57)
+        orientation = tf.transformations.quaternion_from_euler(3.14, 0, 0)
+        target_pose.orientation.x = orientation[0]
+        target_pose.orientation.y = orientation[1]
+        target_pose.orientation.z = orientation[2]
+        target_pose.orientation.w = orientation[3]
+        self.move_group.set_pose_target(target_pose)
+
+        # 目標位置への移動
+        status = False
+        start_time = rospy.Time.now()
+        timeout_duration = rospy.Duration(timeout)
+
+        while status is False:
+            self.logdebug("attempt to tf")
+            self.loginfo(target_pose)
+            current_time = rospy.Time.now()
+            elapsed_time = current_time - start_time
+
+            # 動作計画できない場合を考慮したタイムアウトの実装
+            if elapsed_time > timeout_duration:
+                self.logwarn("TIMEOUT cannot reach target")
+                self.move_group.stop()
+                self.move_group.clear_pose_targets()
+                status = False
+                break
+
+            status = self.move_group.go(wait=True)
+            try:
+                # 軌跡の表示
+                plan = self.move_group.plan()
+                display_trajectory = DisplayTrajectory()
+                display_trajectory.trajectory_start = self.robot.get_current_state()
+                display_trajectory.trajectory.append(plan)
+                self.display_trajectory_publisher.publish(display_trajectory)
+                rospy.sleep(3)  # 軌跡を表示させる時間
+            except Exception as e:
+                self.logwarn(e)
+
+        if status is True:
+            self.logsuccess("reached target tf")
+
+        return status
+
+    def move_to_tf_target(self, target_frame: str, base_frame="odom", timeout=60, use_cartesian=False) -> bool:
         """全身駆動を用いて目標とするTFへエンドエフェクタを移動させる関数
         Args:
             target_frame(str): 目標とするTFの名前
             base_frame(str): 指定したTFの親リンク
                 defaults to odom
             timeout(int): executeに関するタイムアウト
-                defaults to 30
+                defaults to 60
         Returns:
             bool: 移動に成功したかどうか
         """
@@ -106,19 +158,17 @@ class HSRBMoveIt(Logger):
             return False
 
         # TFから取得した変換をPoseに変換
-        # print(trans)
-        # target_pose = tf2_geometry_msgs.do_transform_pose(PoseStamped(), trans)
         target_pose = PoseStamped()
         target_pose.header = trans.header
         target_pose.pose.position = trans.transform.translation
         target_pose.pose.orientation = trans.transform.rotation
+        self.loginfo("get target pose")
         self.loginfo(target_pose)
         # orientation = tf.transformations.quaternion_from_euler(3.14, -1.57, 0)
         # target_pose.pose.orientation.x = orientation[0]
         # target_pose.pose.orientation.y = orientation[1]
         # target_pose.pose.orientation.z = orientation[2]
         # target_pose.pose.orientation.w = orientation[3]
-        # self.loginfo("get target pose")
 
         # MoveItを使用して目標位置に移動
         if use_cartesian:
