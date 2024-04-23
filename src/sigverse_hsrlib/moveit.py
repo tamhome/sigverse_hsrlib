@@ -21,7 +21,7 @@ from moveit_msgs.msg import DisplayTrajectory
 class HSRBMoveIt(Logger):
 
     def __init__(self):
-        Logger.__init__(self, loglevel="DEBUG")
+        Logger.__init__(self, loglevel="INFO")
 
         moveit_commander.roscpp_initialize(sys.argv)
 
@@ -56,45 +56,73 @@ class HSRBMoveIt(Logger):
         self.move_group.stop()
         self.move_group.clear_pose_targets()
 
-    def broadcast_tf(self, position: Tuple[float, float, float], orientation: Tuple[float, float, float, float], target_frame: str, base_frame="odom", loop_num=30) -> None:
-        """TFの配信をする関数
+    def broadcast_tf(self, pose: Pose, target_frame: str, base_frame="odom") -> None:
+        """特定姿勢のTFを配信する
         Args:
-            position (List[float, float, float]): 目標フレームの位置を表す3要素のタプル (x, y, z)
-            orientation (List[float, float, float, float]): 目標フレームの姿勢を表すクォータニオン (x, y, z, w)
-            target_frame (str): 変換情報が適用される子フレームの名前
-            base_frame (str, optional): 変換情報の基準となる親フレームの名前。デフォルトは 'odom'
-            loop_num(int): 30
-
-        Example:
-            broadcast_tf([1.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0], "target_frame", "odom")
+            pose(Pose): 配信したい姿勢
+            target_frame(str): 配信する姿勢の名前
+            base_frame(str): 親フレーム
+        Return:
+            None
         """
         transform = TransformStamped()
 
         transform.header.stamp = rospy.Time.now()
         transform.header.frame_id = base_frame
         transform.child_frame_id = target_frame
-        transform.transform.translation.x = position[0]
-        transform.transform.translation.y = position[1]
-        transform.transform.translation.z = position[2]
-        transform.transform.rotation.x = orientation[0]
-        transform.transform.rotation.y = orientation[1]
-        transform.transform.rotation.z = orientation[2]
-        transform.transform.rotation.w = orientation[3]
+        transform.transform.translation.x = pose.position.x
+        transform.transform.translation.y = pose.position.y
+        transform.transform.translation.z = pose.position.z
+        transform.transform.rotation.x = pose.orientation.x
+        transform.transform.rotation.y = pose.orientation.y
+        transform.transform.rotation.z = pose.orientation.z
+        transform.transform.rotation.w = pose.orientation.w
 
-        # 発行するトランスフォームを送信
-        for _ in range(loop_num):
-            self.broadcaster.sendTransform(transform)
+        self.broadcaster.sendTransform(transform)
 
-    def move_to_pose(self, target_pose: PoseStamped, base_frame="odom", timeout=60) -> bool:
+    # def broadcast_tf(self, position: Tuple[float, float, float], orientation: Tuple[float, float, float, float], target_frame: str, base_frame="odom", loop_num=30) -> None:
+    #     """TFの配信をする関数
+    #     Args:
+    #         position (List[float, float, float]): 目標フレームの位置を表す3要素のタプル (x, y, z)
+    #         orientation (List[float, float, float, float]): 目標フレームの姿勢を表すクォータニオン (x, y, z, w)
+    #         target_frame (str): 変換情報が適用される子フレームの名前
+    #         base_frame (str, optional): 変換情報の基準となる親フレームの名前。デフォルトは 'odom'
+    #         loop_num(int): 30
+
+    #     Example:
+    #         broadcast_tf([1.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0], "target_frame", "odom")
+    #     """
+    #     transform = TransformStamped()
+
+    #     transform.header.stamp = rospy.Time.now()
+    #     transform.header.frame_id = base_frame
+    #     transform.child_frame_id = target_frame
+    #     transform.transform.translation.x = position[0]
+    #     transform.transform.translation.y = position[1]
+    #     transform.transform.translation.z = position[2]
+    #     transform.transform.rotation.x = orientation[0]
+    #     transform.transform.rotation.y = orientation[1]
+    #     transform.transform.rotation.z = orientation[2]
+    #     transform.transform.rotation.w = orientation[3]
+
+    #     # 発行するトランスフォームを送信
+    #     for _ in range(loop_num):
+    #         self.broadcaster.sendTransform(transform)
+
+    def move_to_pose(self, target_pose: Pose, base_frame="odom", timeout=60) -> bool:
         """全身駆動を用いて，目標座標へエンドエフェクタを移動させる関数
         Args:
-            target_pose(PoseStamped): 目標座標
+            target_pose(Pose): 目標座標
             base_frame(str): ベースフレーム
             timeout(int): 移動に関する最大時間
         Returns:
             bool: 移動に成功したかどうか
         """
         # orientation = tf.transformations.quaternion_from_euler(0, -1.57, 1.57)
+        if target_pose.position.z > 1.0:
+            self.logwarn("TFの高さを1.0以上に指定することはできません")
+            self.logwarn("TFの高さを1.0に変更します")
+            target_pose.position.z = 1.0
         orientation = tf.transformations.quaternion_from_euler(3.14, 0, 0)
         target_pose.orientation.x = orientation[0]
         target_pose.orientation.y = orientation[1]
@@ -107,9 +135,10 @@ class HSRBMoveIt(Logger):
         start_time = rospy.Time.now()
         timeout_duration = rospy.Duration(timeout)
 
+        self.loginfo("attempt to pose")
+        self.loginfo(f"\n target pose: \n {target_pose}")
         while status is False:
-            self.logdebug("attempt to tf")
-            self.loginfo(target_pose)
+            self.broadcast_tf(target_pose, "moveit_target_pose", base_frame)
             current_time = rospy.Time.now()
             elapsed_time = current_time - start_time
 

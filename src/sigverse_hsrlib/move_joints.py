@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
+import math
 import rospy
+import tf, tf2_ros
+import tf_conversions
+import numpy as np
 from time import sleep
 from tamlib.utils import Logger
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
+from geometry_msgs.msg import Pose, TransformStamped, Twist
 
 
 class MoveJoints(Logger):
@@ -18,6 +22,12 @@ class MoveJoints(Logger):
         self.joint_topic_name = rospy.get_param("~joint_topic_name", "/hsrb/joint_states")
 
         self.sub_joint_state = rospy.Subscriber(self.joint_topic_name, JointState, self._joint_state_callback)
+        self.pub_base_rot = rospy.Publisher('/hsrb/command_velocity', Twist, queue_size=1)
+
+        self.broadcaster = tf2_ros.TransformBroadcaster()
+        # Create a tf listener
+        self.listener = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.listener)
 
         # HSRBの現在のjointを指定
         self.arm_lift_joint_pos1_ = None
@@ -26,6 +36,8 @@ class MoveJoints(Logger):
         self.arm_flex_joint_pos_ = None
         self.wrist_flex_joint_pos_ = None
         self.wrist_roll_joint_pos_ = None
+        self.head_pan_joint_pos_ = None
+        self.head_tilt_joint_pos_ = None
 
     def _joint_state_callback(self, joint_state):
         for i in range(len(joint_state.name)):
@@ -40,6 +52,10 @@ class MoveJoints(Logger):
                 self.wrist_flex_joint_pos_ = joint_state.position[i]
             elif joint_state.name[i] == "wrist_roll_joint":
                 self.wrist_roll_joint_pos_ = joint_state.position[i]
+            elif joint_state.name[i] == "head_pan_joint":
+                self.head_pan_joint_pos_ = joint_state.position[i]
+            elif joint_state.name[i] == "head_tilt_joint":
+                self.head_tilt_joint_pos_ = joint_state.position[i]
 
     def get_current_joint(self):
         """現在のHSRのジョイント角を取得
@@ -55,6 +71,8 @@ class MoveJoints(Logger):
         current_joint["arm_roll_joint"] = self.arm_roll_joint_pos_
         current_joint["wrist_flex_joint"] = self.wrist_flex_joint_pos_
         current_joint["wrist_roll_joint"] = self.wrist_roll_joint_pos_
+        current_joint["head_pan_joint"] = self.head_pan_joint_pos_
+        current_joint["head_tilt_joint"] = self.head_tilt_joint_pos_
 
         return current_joint
 
@@ -178,6 +196,77 @@ class MoveJoints(Logger):
         self.move_arm_by_pose(0.0, 0.0, -1.57, -1.57, 0.0)
         self.move_head(0.0, 0.0)
         self.loginfo("Send GO command")
+
+    def gaze_point(self, target_pose: Pose, frame: str = "odom", timeout=10) -> bool:
+        """台車を回転させることによるgaze_point
+        Args:
+            target_pose(Pose): 目標位置
+            frame(str): 目標位置のベースフレーム
+                odom以外では動かないので要修正
+            timeout(int): タイムアウト
+                defaults to 10
+        Returns:
+            bool: 移動に成功したかどうか
+        """
+        self.loginfo("start gaze point")
+        start_time = rospy.Time.now()
+        timeout_duration = rospy.Duration(timeout)
+        while not rospy.is_shutdown():
+            current_time = rospy.Time.now()
+            if current_time - start_time > timeout_duration:
+                self.logwarn("cannot reach goal")
+                return False
+            target_position = target_pose.position
+            transform = TransformStamped()
+            # Set the translation and rotation of the transform
+            transform.header.stamp = rospy.Time.now()
+            transform.header.frame_id = frame
+            transform.child_frame_id = "target_position"
+            transform.transform.translation.x = target_position.x
+            transform.transform.translation.y = target_position.y
+            transform.transform.translation.z = target_position.z
+            transform.transform.rotation.x = 0
+            transform.transform.rotation.y = 0
+            transform.transform.rotation.z = 0
+            transform.transform.rotation.w = 1
+
+            # Send the transformation
+            self.broadcaster.sendTransform(transform)
+
+            # Check if the transform is possible
+            if not self.listener.can_transform("base_footprint", "target_position", rospy.Time(0)):
+                self.logwarn("cannot get transform tf")
+                continue
+
+            try:
+                # Lookup the transformation
+                trans = self.listener.lookup_transform("base_footprint", "target_position", rospy.Time(0))
+            except tf2_ros.TransformException as e:
+                self.logerr("TF lookup error: %s" % str(e))
+                continue
+
+            # Compute the angle
+            angle = math.atan2(trans.transform.translation.y, trans.transform.translation.x)
+            # Prepare the twist message
+            twist_msg = Twist()
+
+            # Publish the twist message based on the angle
+            if -2.5 * math.pi / 180 < angle < 2.5 * math.pi / 180:
+                self.loginfo("goal reached")
+                twist_msg.angular.z = 0
+                self.pub_base_rot.publish(twist_msg)
+                return True
+            else:
+                if angle <= -2.5 * math.pi / 180:
+                    twist_msg.angular.z = -10 * math.pi / 180
+                    self.pub_base_rot.publish(twist_msg)
+
+                elif angle >= 2.5 * math.pi / 180:
+                    twist_msg.angular.z = 10 * math.pi / 180
+                    self.pub_base_rot.publish(twist_msg)
+
+            self.loginfo(angle)
+            rospy.sleep(0.1)
 
     # def detection(self):
     #     self.go()
