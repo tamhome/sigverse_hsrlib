@@ -7,15 +7,22 @@ from geometry_msgs.msg import Pose
 def test_move_base():
     move_joint = MoveJoints()
     move_joint.move_base_joint(1, 1, 0)
-
+    rospy.loginfo("command complete")
+    rospy.sleep(3)
 
 def test_gaze(pose, frame):
     move_joint = MoveJoints()
     move_joint.gaze_point(pose, frame)
 
+def test_move_joint():
+    move_joint = MoveJoints()
+    move_joint.neutral()
+    rospy.sleep(5)
 
 if __name__ == "__main__":
     rospy.init_node("test_movejoint")
+    # test_move_joint()
+    # test_move_base()
     # test_move_base()
 
     pose = Pose()
