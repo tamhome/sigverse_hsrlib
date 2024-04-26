@@ -10,18 +10,21 @@ import tf2_ros
 import tf2_geometry_msgs
 from typing import Tuple, List
 from tamlib.utils import Logger
-
+from tamlib.tf import Transform, quaternion2euler, euler2quaternion
+from sigverse_hsrlib import MoveJoints
 
 from geometry_msgs.msg import Pose
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import TransformStamped
 from moveit_msgs.msg import DisplayTrajectory
+from sensor_msgs.msg import JointState
 
+from moveit_msgs.msg import RobotState
 
 class HSRBMoveIt(Logger):
 
     def __init__(self):
-        Logger.__init__(self, loglevel="INFO")
+        Logger.__init__(self, loglevel="DEBUG")
 
         moveit_commander.roscpp_initialize(sys.argv)
 
@@ -37,7 +40,6 @@ class HSRBMoveIt(Logger):
         self.display_trajectory_publisher = rospy.Publisher('/move_group/display_planned_path', DisplayTrajectory, queue_size=20)
         self.move_group = whole_body
         self.move_group.set_planning_time(10.0)  # 最大計画時間を10秒に設定
-
         eef_link = self.move_group.get_end_effector_link()  # エンドエフェクタのリンクを取得
 
         if eef_link is None:
@@ -51,6 +53,9 @@ class HSRBMoveIt(Logger):
         self.tf_listener = tf2_ros.Buffer()
         self.listener = tf2_ros.TransformListener(self.tf_listener)
         self.broadcaster = tf2_ros.TransformBroadcaster()
+
+        self.tamtf = Transform()
+        self.tam_move_joints = MoveJoints()
 
     def delete(self):
         self.move_group.stop()
@@ -118,7 +123,7 @@ class HSRBMoveIt(Logger):
         Returns:
             bool: 移動に成功したかどうか
         """
-        # orientation = tf.transformations.quaternion_from_euler(0, -1.57, 1.57)
+
         if target_pose.position.z > 1.0:
             self.logwarn("TFの高さを1.0以上に指定することはできません")
             self.logwarn("TFの高さを1.0に変更します")
@@ -128,6 +133,19 @@ class HSRBMoveIt(Logger):
         target_pose.orientation.y = orientation[1]
         target_pose.orientation.z = orientation[2]
         target_pose.orientation.w = orientation[3]
+        try:
+            self.loginfo("get current state")
+            # current_state = self.move_group.get_current_state()
+            current_state = RobotState()
+            current_joint = rospy.wait_for_message("/hsrb/joint_states", JointState, timeout=10)
+            current_state.joint_state = current_joint
+            self.loginfo(current_state)
+            current_state.joint_state.header.stamp = rospy.Time.now()
+            self.loginfo("set current state")
+            self.move_group.set_start_state(current_state)
+        except Exception as e:
+            self.logwarn(e)
+
         self.move_group.set_pose_target(target_pose)
 
         # 目標位置への移動
@@ -150,10 +168,34 @@ class HSRBMoveIt(Logger):
                 status = False
                 break
 
+            plan = self.move_group.plan()
             status = self.move_group.go(wait=True)
             try:
                 # 軌跡の表示
                 plan = self.move_group.plan()
+                # self.logdebug(plan)
+                # self.logdebug(plan[0])
+
+                # if plan[0] is False:
+                #     self.logdebug("change goal pose")
+                #     self.delete()
+                #     rospy.sleep(0.5)
+                #     current_orientation_euler = quaternion2euler(target_pose.orientation)
+                #     next_target_orientation_euler = current_orientation_euler
+                #     self.logdebug(next_target_orientation_euler)
+                #     if current_orientation_euler[2] > 3.14:
+                #         current_orientation_euler[2] = 0
+
+                #     next_target_orientation_quart = euler2quaternion(
+                #         roll=current_orientation_euler[0],
+                #         pitch=current_orientation_euler[1],
+                #         yaw=current_orientation_euler[2]+0.1
+                #     )
+                #     target_pose.orientation = next_target_orientation_quart
+                #     target_pose.position.x = target_pose.position.x + 0.01
+                #     self.move_group.set_pose_target(target_pose)
+                #     continue
+
                 display_trajectory = DisplayTrajectory()
                 display_trajectory.trajectory_start = self.robot.get_current_state()
                 display_trajectory.trajectory.append(plan)
@@ -205,6 +247,18 @@ class HSRBMoveIt(Logger):
             self.move_group.execute(plan)
             status = True
         else:
+            try:
+                self.loginfo("get current state")
+                # current_state = self.move_group.get_current_state()
+                current_state = RobotState()
+                current_joint = rospy.wait_for_message("/hsrb/joint_states", JointState, timeout=10)
+                current_state.joint_state = current_joint
+                self.loginfo(current_state)
+                current_state.joint_state.header.stamp = rospy.Time.now()
+                self.loginfo("set current state")
+                self.move_group.set_start_state(current_state)
+            except Exception as e:
+                self.logwarn(e)
             self.move_group.set_pose_target(target_pose)
 
             # 目標位置への移動
