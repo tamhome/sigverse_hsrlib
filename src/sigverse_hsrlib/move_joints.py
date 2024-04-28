@@ -38,6 +38,8 @@ class MoveJoints(Logger):
         self.wrist_roll_joint_pos_ = None
         self.head_pan_joint_pos_ = None
         self.head_tilt_joint_pos_ = None
+        self.hand_l_joint_pos_ = None
+        self.hand_r_joint_pos_ = None
 
     def _joint_state_callback(self, joint_state):
         for i in range(len(joint_state.name)):
@@ -56,6 +58,10 @@ class MoveJoints(Logger):
                 self.head_pan_joint_pos_ = joint_state.position[i]
             elif joint_state.name[i] == "head_tilt_joint":
                 self.head_tilt_joint_pos_ = joint_state.position[i]
+            elif joint_state.name[i] == "hand_l_spring_proximal_joint":
+                self.hand_l_joint_pos_ = joint_state.position[i]
+            elif joint_state.name[i] == "hand_r_spring_proximal_joint":
+                self.hand_r_joint_pos_ = joint_state.position[i]
 
     def get_current_joint(self):
         """現在のHSRのジョイント角を取得
@@ -73,6 +79,8 @@ class MoveJoints(Logger):
         current_joint["wrist_roll_joint"] = self.wrist_roll_joint_pos_
         current_joint["head_pan_joint"] = self.head_pan_joint_pos_
         current_joint["head_tilt_joint"] = self.head_tilt_joint_pos_
+        current_joint["hand_l_spring_proximal_joint"] = self.hand_l_joint_pos_
+        current_joint["hand_r_spring_proximal_joint"] = self.hand_r_joint_pos_
 
         return current_joint
 
@@ -214,8 +222,13 @@ class MoveJoints(Logger):
         while not rospy.is_shutdown():
             current_time = rospy.Time.now()
             if current_time - start_time > timeout_duration:
+                twist_msg = Twist()
+                twist_msg.angular.z = 0
+                self.pub_base_rot.publish(twist_msg)
+
                 self.logwarn("cannot reach goal")
                 return False
+
             target_position = target_pose.position
             transform = TransformStamped()
             # Set the translation and rotation of the transform
