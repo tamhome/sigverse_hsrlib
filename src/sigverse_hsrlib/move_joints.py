@@ -281,18 +281,6 @@ class MoveJoints(Logger):
             self.loginfo(angle)
             rospy.sleep(0.1)
 
-    # def detection(self):
-    #     self.go()
-    #     self.move_head(0.0,-1.0)
-    #     sleep(2)
-
-    # def grasp_from_front(self,al):
-    #     self.move_arm(al,-3.0,0.0,1.5,0.0)
-    #     #self.move_arm(0.0,-3.0,0.0,1.5,0.0)
-
-    # def horizontal(self,al):
-    #     self.move_arm(al,-1.57,0.0,0.0,0.0)
-
 
 if __name__ == "__main__":
     rospy.init_node('test_move_joints')
