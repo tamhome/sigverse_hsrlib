@@ -21,6 +21,7 @@ from sensor_msgs.msg import JointState
 
 from moveit_msgs.msg import RobotState
 
+
 class HSRBMoveIt(Logger):
 
     def __init__(self):
@@ -84,35 +85,6 @@ class HSRBMoveIt(Logger):
         transform.transform.rotation.w = pose.orientation.w
 
         self.broadcaster.sendTransform(transform)
-
-    # def broadcast_tf(self, position: Tuple[float, float, float], orientation: Tuple[float, float, float, float], target_frame: str, base_frame="odom", loop_num=30) -> None:
-    #     """TFの配信をする関数
-    #     Args:
-    #         position (List[float, float, float]): 目標フレームの位置を表す3要素のタプル (x, y, z)
-    #         orientation (List[float, float, float, float]): 目標フレームの姿勢を表すクォータニオン (x, y, z, w)
-    #         target_frame (str): 変換情報が適用される子フレームの名前
-    #         base_frame (str, optional): 変換情報の基準となる親フレームの名前。デフォルトは 'odom'
-    #         loop_num(int): 30
-
-    #     Example:
-    #         broadcast_tf([1.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0], "target_frame", "odom")
-    #     """
-    #     transform = TransformStamped()
-
-    #     transform.header.stamp = rospy.Time.now()
-    #     transform.header.frame_id = base_frame
-    #     transform.child_frame_id = target_frame
-    #     transform.transform.translation.x = position[0]
-    #     transform.transform.translation.y = position[1]
-    #     transform.transform.translation.z = position[2]
-    #     transform.transform.rotation.x = orientation[0]
-    #     transform.transform.rotation.y = orientation[1]
-    #     transform.transform.rotation.z = orientation[2]
-    #     transform.transform.rotation.w = orientation[3]
-
-    #     # 発行するトランスフォームを送信
-    #     for _ in range(loop_num):
-    #         self.broadcaster.sendTransform(transform)
 
     def move_to_pose(self, target_pose: Pose, base_frame="odom", timeout=60) -> bool:
         """全身駆動を用いて，目標座標へエンドエフェクタを移動させる関数

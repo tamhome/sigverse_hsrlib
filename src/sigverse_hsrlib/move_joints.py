@@ -14,7 +14,7 @@ from geometry_msgs.msg import Pose, TransformStamped, Twist
 
 class MoveJoints(Logger):
     def __init__(self):
-        Logger.__init__(self)
+        Logger.__init__(self, loglevel="INFO")
         self.head_pub = rospy.Publisher('/hsrb/head_trajectory_controller/command', JointTrajectory, queue_size=1)
         self.arm_pub = rospy.Publisher('/hsrb/arm_trajectory_controller/command', JointTrajectory, queue_size=1)
         self.base_pub = rospy.Publisher('/hsrb/omni_base_controller/command', JointTrajectory, queue_size=1)        
@@ -278,7 +278,7 @@ class MoveJoints(Logger):
                     twist_msg.angular.z = 10 * math.pi / 180
                     self.pub_base_rot.publish(twist_msg)
 
-            self.loginfo(angle)
+            self.logdebug(angle)
             rospy.sleep(0.1)
 
     # def detection(self):
